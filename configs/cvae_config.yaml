@@ -1,0 +1,47 @@
+data:
+  data_dir: "C:/Users/netanel.daniel/DAS-dataset/DAS-dataset/data"
+  patch_channels: 32          # spatial neighborhood (fiber channels)
+  patch_time: 256             # time samples per patch
+  shift: 128                  # stride along time axis
+  decimation:                 # reduce dataset per class (fraction to keep)
+    regular: 0.02
+    car: 0.05
+    walk: 0.10
+    running: 0.20
+    longboard: 0.20
+    fence: 0.20
+    construction: 0.30
+    manipulation: 0.30
+    openclose: 0.30
+  val_split: 0.15
+  test_split: 0.10
+  num_workers: 4
+  classes:
+    - car
+    - construction
+    - fence
+    - longboard
+    - manipulation
+    - openclose
+    - regular
+    - running
+    - walk
+
+model:
+  latent_dim: 64
+  encoder_channels: [32, 64, 128]   # progressive downsampling
+  beta: 4.0
+  beta_warmup_epochs: 10            # linear anneal from 0 → beta
+
+training:
+  epochs: 100
+  batch_size: 64
+  lr: 1e-4
+  weight_decay: 1e-5
+  seed: 42
+  checkpoint_dir: "checkpoints/"
+  wandb_project: "das-cvae"
+
+generation:
+  n_samples_per_class: 500
+  output_dir: "generated/"
