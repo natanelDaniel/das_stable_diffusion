@@ -416,10 +416,10 @@ def update_plots(h5_path, ch_idx, ds, clear_clicks, existing_log):
                 y=np.arange(n_ch) * SPAT_RES,
                 colorscale="RdBu", reversescale=True,
                 zmin=-vmax, zmax=vmax,
-                colorbar=dict(
-                    title={"text": "Amplitude"},
+                colorbar=go.heatmap.ColorBar(
+                    title_text="Amplitude",
                     len=0.48, y=0.78, thickness=10,
-                    tickfont=dict(size=9, color=TEXT_COLOR),
+                    tickfont_size=9,
                 ),
                 hovertemplate="t=%{x:.3f}s  dist=%{y:.0f}m  amp=%{z}<extra></extra>",
             ), row=1, col=1,
@@ -448,10 +448,10 @@ def update_plots(h5_path, ch_idx, ds, clear_clicks, existing_log):
             go.Heatmap(
                 z=Sxx_db, x=t_spec, y=f_spec / 1000,
                 colorscale="Inferno",
-                colorbar=dict(
-                    title={"text": "dB"},
+                colorbar=go.heatmap.ColorBar(
+                    title_text="dB",
                     len=0.42, y=0.22, thickness=10,
-                    tickfont=dict(size=9, color=TEXT_COLOR),
+                    tickfont_size=9,
                 ),
                 hovertemplate="t=%{x:.3f}s  f=%{y:.2f}kHz  %{z:.1f}dB<extra></extra>",
             ), row=2, col=1,
