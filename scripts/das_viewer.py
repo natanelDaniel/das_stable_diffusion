@@ -530,4 +530,4 @@ if __name__ == "__main__":
     print(f"  Data: {DATA_DIR}")
     print(f"  Classes: {CLASSES}")
     print("  Open http://127.0.0.1:8050")
-    app.run(debug=False, host="127.0.0.1", port=8050)
+    app.run(debug=False, host="127.0.0.1", port=8051)
