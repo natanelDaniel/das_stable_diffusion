@@ -69,17 +69,25 @@ class CVAE(nn.Module):
         """
         Sample n patches conditioned on class label c.
 
+        Saves and restores training mode so this can be called mid-training
+        (e.g. for logging sample images) without corrupting the training state.
+
         Args:
             c: [1, n_classes] or [n, n_classes] — condition(s)
             n: number of samples (ignored if c has batch dim > 1)
         Returns:
             samples: [n, 1, H, W]
         """
+        was_training = self.training
         self.eval()
-        if c.dim() == 1:
-            c = c.unsqueeze(0).expand(n, -1)
-        elif c.size(0) == 1 and n > 1:
-            c = c.expand(n, -1)
-        c = c.to(device)
-        z = torch.randn(c.size(0), self.latent_dim, device=device)
-        return self.decoder(z, c)
+        try:
+            if c.dim() == 1:
+                c = c.unsqueeze(0).expand(n, -1)
+            elif c.size(0) == 1 and n > 1:
+                c = c.expand(n, -1)
+            c = c.to(device)
+            z = torch.randn(c.size(0), self.latent_dim, device=device)
+            return self.decoder(z, c)
+        finally:
+            if was_training:
+                self.train()
