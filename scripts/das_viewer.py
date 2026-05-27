@@ -417,8 +417,7 @@ def update_plots(h5_path, ch_idx, ds, clear_clicks, existing_log):
                 colorscale="RdBu", reversescale=True,
                 zmin=-vmax, zmax=vmax,
                 colorbar=dict(
-                    title=dict(text="Amplitude", side="right",
-                               font=dict(size=10, color=TEXT_COLOR)),
+                    title={"text": "Amplitude"},
                     len=0.48, y=0.78, thickness=10,
                     tickfont=dict(size=9, color=TEXT_COLOR),
                 ),
@@ -450,8 +449,7 @@ def update_plots(h5_path, ch_idx, ds, clear_clicks, existing_log):
                 z=Sxx_db, x=t_spec, y=f_spec / 1000,
                 colorscale="Inferno",
                 colorbar=dict(
-                    title=dict(text="dB", side="right",
-                               font=dict(size=10, color=TEXT_COLOR)),
+                    title={"text": "dB"},
                     len=0.42, y=0.22, thickness=10,
                     tickfont=dict(size=9, color=TEXT_COLOR),
                 ),
