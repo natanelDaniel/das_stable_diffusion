@@ -32,7 +32,7 @@ class DASPatchDataset(Dataset):
         data_dir:       Root directory containing one sub-folder per class.
         patch_channels: Number of fiber channels per patch (spatial extent).
         patch_time:     Number of time samples per patch.
-        shift:          Stride (in samples) for the sliding time window.
+        bitmap_shift:   Stride (in samples) used when building the event bitmap.
         decimation:     Dict[class_name, keep_fraction] — random keep fraction.
         classes:        Ordered list of class names (must match sub-folder names).
         seed:           RNG seed for decimation.
@@ -43,7 +43,6 @@ class DASPatchDataset(Dataset):
         data_dir: str,
         patch_channels: int = 32,
         patch_time: int = 256,
-        shift: int = 128,
         bitmap_shift: int = 2048,
         decimation: Optional[dict] = None,
         classes: Optional[List[str]] = None,
@@ -52,7 +51,6 @@ class DASPatchDataset(Dataset):
         self.data_dir = data_dir
         self.patch_channels = patch_channels
         self.patch_time = patch_time
-        self.shift = shift
         self.bitmap_shift = bitmap_shift
         self.decimation = decimation or {}
         self.classes = classes or CLASSES
@@ -72,7 +70,7 @@ class DASPatchDataset(Dataset):
             class_idx = self.class_to_idx[class_name]
             keep_frac = self.decimation.get(class_name, 1.0)
 
-            for h5_path in glob(os.path.join(class_dir, "*.h5")):
+            for h5_path in sorted(glob(os.path.join(class_dir, "*.h5"))):
                 npy_path = h5_path[:-3] + ".npy"
                 if not os.path.exists(npy_path):
                     continue
@@ -100,10 +98,9 @@ class DASPatchDataset(Dataset):
             # Time slice
             # win_idx * bitmap_shift anchors to the start of the labeled event window
             # (bitmap was created with shift=2048 in the original DASDataLoader)
-            t_anchor = win_idx * self.bitmap_shift
-            # Centre our patch_time window within the event window
-            half_patch = self.patch_time // 2
-            t_start = max(0, t_anchor - half_patch)
+            # Centre 256-sample patch on the midpoint of the 2048-sample bitmap event window
+            t_center = win_idx * self.bitmap_shift + self.bitmap_shift // 2
+            t_start = max(0, t_center - self.patch_time // 2)
             t_end = t_start + self.patch_time
             if t_end > n_time:
                 t_end = n_time
@@ -148,7 +145,7 @@ class DASPatchDataset(Dataset):
         patch_tensor = torch.tensor(patch, dtype=torch.float32).unsqueeze(0)
 
         # One-hot label
-        onehot = torch.zeros(N_CLASSES, dtype=torch.float32)
+        onehot = torch.zeros(len(self.classes), dtype=torch.float32)
         onehot[class_idx] = 1.0
 
         return patch_tensor, class_idx, onehot
