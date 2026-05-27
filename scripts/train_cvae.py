@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader, random_split
 
 from src.data.das_patch_dataset import DASPatchDataset
 from src.models.cvae import CVAE
+from src.training.trainer import CVAETrainer
 
 
 def set_seed(seed: int):
@@ -89,7 +90,6 @@ def main():
         return
 
     # ---- Model ----
-    from src.training.trainer import CVAETrainer  # noqa: deferred to avoid tqdm/wandb at dry-run
     model_cfg = cfg["model"]
     model = CVAE(
         latent_dim=model_cfg["latent_dim"],
