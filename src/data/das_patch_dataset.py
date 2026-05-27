@@ -5,7 +5,7 @@ Each patch shape: [1, patch_channels, patch_time]  (grayscale 2D image)
 Label: integer class index and one-hot vector.
 
 HDF5 structure:  f["Acquisition"]["Raw[0]"]["RawData"]  shape=[n_time, n_fiber_ch]
-Bitmap structure: .npy shape=[n_fiber_ch, n_windows]    value 1 → event present
+Bitmap structure: .npy shape=[n_windows, n_fiber_ch]    value 1 → event present
 """
 
 import os
@@ -44,6 +44,7 @@ class DASPatchDataset(Dataset):
         patch_channels: int = 32,
         patch_time: int = 256,
         shift: int = 128,
+        bitmap_shift: int = 2048,
         decimation: Optional[dict] = None,
         classes: Optional[List[str]] = None,
         seed: int = 42,
@@ -52,6 +53,7 @@ class DASPatchDataset(Dataset):
         self.patch_channels = patch_channels
         self.patch_time = patch_time
         self.shift = shift
+        self.bitmap_shift = bitmap_shift
         self.decimation = decimation or {}
         self.classes = classes or CLASSES
         self.class_to_idx = {c: i for i, c in enumerate(self.classes)}
@@ -75,15 +77,15 @@ class DASPatchDataset(Dataset):
                 if not os.path.exists(npy_path):
                     continue
 
-                bitmap = np.load(npy_path)  # [n_fiber_ch, n_windows]
-                event_positions = np.argwhere(bitmap)  # [[ch, win], ...]
+                bitmap = np.load(npy_path)  # [n_windows, n_fiber_ch] — NOT [n_fiber_ch, n_windows]
+                event_positions = np.argwhere(bitmap)  # [[win, ch], ...]
 
                 if keep_frac < 1.0:
                     n_keep = max(1, int(len(event_positions) * keep_frac))
                     idx = self.rng.choice(len(event_positions), n_keep, replace=False)
                     event_positions = event_positions[idx]
 
-                for ch_idx, win_idx in event_positions:
+                for win_idx, ch_idx in event_positions:
                     self.samples.append((h5_path, int(win_idx), int(ch_idx), class_idx))
 
         if not self.samples:
@@ -96,11 +98,16 @@ class DASPatchDataset(Dataset):
             n_time, n_fiber = raw.shape
 
             # Time slice
-            t_start = win_idx * self.shift
+            # win_idx * bitmap_shift anchors to the start of the labeled event window
+            # (bitmap was created with shift=2048 in the original DASDataLoader)
+            t_anchor = win_idx * self.bitmap_shift
+            # Centre our patch_time window within the event window
+            half_patch = self.patch_time // 2
+            t_start = max(0, t_anchor - half_patch)
             t_end = t_start + self.patch_time
             if t_end > n_time:
-                t_start = max(0, n_time - self.patch_time)
                 t_end = n_time
+                t_start = max(0, t_end - self.patch_time)
 
             # Channel slice (centred on event channel, clamped to boundaries)
             half_ch = self.patch_channels // 2

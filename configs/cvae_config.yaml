@@ -3,6 +3,7 @@ data:
   patch_channels: 32          # spatial neighborhood (fiber channels)
   patch_time: 256             # time samples per patch
   shift: 128                  # stride along time axis
+  bitmap_shift: 2048          # shift used when creating the bitmap .npy files
   decimation:                 # reduce dataset per class (fraction to keep)
     regular: 0.02
     car: 0.05
