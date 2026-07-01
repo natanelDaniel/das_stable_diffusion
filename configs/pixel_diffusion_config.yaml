@@ -1,0 +1,91 @@
+data:
+  data_dir: C:/Users/netanel.daniel/DAS-dataset/DAS-dataset/data
+  patch_channels: 8
+  patch_time: 16384                 # 32.768 s @ 500 Hz (= 2048 * 8)
+  target_sample_rate: 500
+  event_offset_range:               # event center placed in [4s, 28s] of the 32.768s patch
+  - 2000
+  - 14000
+  mix_alpha_range:
+  - 0.0
+  - 1.0
+  decimation:
+    regular: 0.05
+    car: 0.5
+    running: 0.5
+    walk: 0.5
+  classes:
+  - car
+  - regular
+  - running
+  - walk
+  noise_class: regular
+  normalize:
+    mean: -23125.091873471658
+    std: 5382.113066296321
+  val_split: 0.15
+  test_split: 0.15
+  num_workers: 0
+  cache_in_ram: true
+  seed: 42
+model:
+  pixel_diffusion:
+    base_channels: 96               # was 32 — 3x channels in every layer
+    channel_mults:                  # max = 96*4 = 384 (was 128); progression steeper
+    - 1
+    - 2
+    - 4
+    - 4
+    num_res_blocks: 2               # was 1 — twice the depth at each level
+    kernel: 5
+    cond_dim: 256                   # was 128 — richer class+alpha conditioning
+    num_classes: 4
+    # Dilated convs at every level — WaveNet-style RF growth.
+    # Inner ResBlock is dilation 1 (preserves locality), outer doubles up the level.
+    dilations_per_level:
+      - [1, 2]                      # W=16384: RF ~14 (×16 in input scale = 14)
+      - [1, 4]                      # W=8192:  RF ~26 (× cumulative downsample 2)
+      - [1, 8]                      # W=4096:  RF ~50
+      - [1, 16]                     # W=2048:  RF ~90 (× cumulative 8 = ~720 input samples)
+    # Self-attention at the deepest level + bottleneck → global temporal RF there.
+    # Attention at W=4096 would cost ~1.6 GB just for the attn matrix at batch=12 — risky.
+    use_attention_per_level:
+      - false                       # W=16384
+      - false                       # W=8192
+      - false                       # W=4096 — skip (OOM risk)
+      - true                        # W=2048 — safe + biggest single gain
+    attention_in_mid: true
+    attention_heads: 4
+    num_train_timesteps: 1000
+    prediction_type: v_prediction
+    beta_schedule: squaredcos_cap_v2
+    cfg_dropout: 0.1
+    alpha_cfg_dropout: 0.1
+    ema_decay: 0.9999
+    lambda_stft: 0.1                # auxiliary STFT-on-x0 loss weight (0 = MSE only)
+    stft_n_ffts: [1024, 2048]       # multi-scale STFT window sizes
+    lambda_deriv: 0.5               # |d(real)/dt - d(pred)/dt| loss on x0_pred — targets transients
+    min_snr_gamma: 5.0              # min-SNR weighting clamp (Hang+ 2023). null = uniform weight
+    lambda_band_stft: 1.0           # STFT loss restricted to the signal band (high weight)
+    band_stft_freq_max: 128.0       # Hz — half of Nyquist (250) at SR=500; lower-band focus
+    band_stft_n_ffts: [1024, 2048]
+training:
+  pixel_diffusion:
+    epochs: 200                     # was 500 — each epoch ~3x slower with the bigger model
+    batch_size: 16                  # was 32 — model is ~6x bigger, halve batch to fit VRAM
+    lr: 0.0001                      # was 2e-4 — smaller lr for bigger model stability
+    weight_decay: 1.0e-05
+    grad_clip: 1.0
+    amp: true
+    checkpoint_dir: checkpoints/das_pixel_diffusion/
+    wandb_project: das-stable-diffusion
+    wandb_run_name: null
+    wandb_log_freq: 100
+    wandb_sample_every_n_epochs: 1
+    wandb_sample_n_gens: 10            # generations per class shown in real_vs_gen panels
+generation:
+  cfg_scale: 7.5
+  alpha_cfg_scale: 1.0
+  sampler: ddim
+  steps: 50
+  output_dir: generated_pixel/

@@ -1,0 +1,91 @@
+data:
+  data_dir: "C:/Users/netanel.daniel/DAS-dataset/DAS-dataset/data"
+  patch_channels: 8
+  patch_time: 16384                 # 16.384 s @ 1 kHz
+  target_sample_rate: 1000          # informational; decimation lives in .dec1k.npy cache
+  event_offset_range: [2000, 14000] # event lands somewhere in [2s, 14s] within the patch
+  mix_alpha_range: [0.0, 1.0]       # uniform alpha range for additive event+alpha*noise mix
+  decimation:                       # dataset subsampling (NOT signal decimation)
+    regular: 0.05                   # background/noise class — abundant, keep 5%
+    car: 0.5
+    walk: 0.5
+    running: 0.5
+    longboard: 0.5
+    fence: 0.5
+    construction: 0.5
+    manipulation: 0.5
+    openclose: 0.5
+  classes:
+    - car
+    - construction
+    - fence
+    - longboard
+    - manipulation
+    - openclose
+    - regular
+    - running
+    - walk
+  noise_class: regular              # used by sampling CLI to validate --probs keys
+  normalize:                        # filled in by scripts/compute_dataset_stats.py
+    mean: 0.0
+    std: 1.0
+  val_split: 0.15
+  test_split: 0.10
+  num_workers: 0                    # cache_in_ram=true means data is in RAM already;
+                                    # workers would just duplicate it.
+  cache_in_ram: true                # 137 GB RAM available, ~6 GB caches — keep entirely
+                                    # in memory to avoid HDD random-read seeks.
+  seed: 42
+
+model:
+  vae:
+    latent_channels: 4
+    encoder_channels: [32, 64, 96, 128]
+    temporal_strides: [4, 4, 4]     # 3 down-blocks -> 64x temporal compression: 16384 -> 256
+    kernel_time: 5
+    kernel_space: 3
+    beta: 1.0e-3
+    lambda_stft: 0.0                # 0 = MSE only (fastest). Bump to 1.0 once recon works
+    stft_n_ffts: [1024]
+    scaling_factor: 1.0             # filled in after VAE training (1 / sigma_latent)
+  diffusion:
+    cond_dim: 128
+    num_train_timesteps: 1000
+    prediction_type: v_prediction
+    beta_schedule: squaredcos_cap_v2
+    cfg_dropout: 0.1                # class CFG dropout probability
+    alpha_cfg_dropout: 0.1          # alpha CFG dropout probability (independent)
+    num_classes: 9                  # null is index 9 (10 total embeddings)
+    ema_decay: 0.9999
+
+training:
+  vae:
+    epochs: 100
+    batch_size: 64
+    lr: 1.0e-4
+    weight_decay: 1.0e-5
+    grad_clip: 1.0
+    amp: true
+    checkpoint_dir: "checkpoints/das_vae_v2/"
+    wandb_project: "das-stable-diffusion"
+    wandb_run_name: null            # auto: f"vae-{datetime}"
+    wandb_log_freq: 50
+  diffusion:
+    epochs: 200
+    batch_size: 64
+    lr: 1.0e-4
+    weight_decay: 1.0e-5
+    grad_clip: 1.0
+    amp: true
+    checkpoint_dir: "checkpoints/das_diffusion/"
+    wandb_project: "das-stable-diffusion"
+    wandb_run_name: null
+    wandb_log_freq: 500
+    wandb_sample_every_n_epochs: 5
+
+generation:
+  cfg_scale: 7.5
+  sampler: ddim
+  steps: 50
+  mix_mode: composable              # or "embed_avg"
+  output_dir: "generated/"

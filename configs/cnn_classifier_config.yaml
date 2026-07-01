@@ -1,0 +1,85 @@
+data:
+  data_dir: C:/Users/netanel.daniel/DAS-dataset/DAS-dataset/data
+  patch_channels: 8
+  patch_time: 16384                 # 32.768 s @ 500 Hz
+  target_sample_rate: 500
+  event_offset_range:
+  - 2000
+  - 14000
+  decimation:
+    regular: 0.05
+    car: 0.5
+    running: 0.5
+    walk: 0.5
+  classes:
+  - car
+  - regular
+  - running
+  - walk
+  normalize:
+    mean: -23125.091873471658
+    std: 5382.113066296321
+  val_split: 0.15
+  test_split: 0.15
+  num_workers: 0
+  cache_in_ram: true
+  seed: 42
+
+model:
+  embed_dim: 512
+  dropout: 0.35
+  n_classes: 4
+
+training:
+  epochs: 100
+  batch_size: 64
+  lr: 3.0e-4
+  weight_decay: 8.5e-3
+  grad_clip: 1.0
+  scheduler_T0: 50
+  amp: true
+  checkpoint_dir: checkpoints/das_cnn_classifier/
+  wandb_project: das-cnn-classifier
+  log_every_n_epochs: 5            # confusion matrix, gallery, ROC/PR, tables
+  background_noise_std: 0.3       # additive Gaussian noise during training (normalized units)
+
+synthetic:
+  n_per_alpha: 200                 # background patches per alpha value
+  alpha_values:                    # noise mix level for generated backgrounds
+  - 0.0
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  mix_alpha_range: [0.0, 0.4]      # Uniform(lo, hi) used at training time for event+bg mix
+  noise_class: regular             # which class to generate as background
+  cfg_scale: 7.5
+  alpha_cfg_scale: 1.0
+  steps: 50
+  diffusion_ckpt: checkpoints/das_pixel_diffusion/diffusion_best.pt
+  pixel_diffusion_config: configs/pixel_diffusion_config.yaml
+  use_ema: true
+  gen_batch_size: 50               # samples per forward pass during generation
+  # bg_cache_path: checkpoints/das_pixel_diffusion/bg_cache_custom.pt  # optional override
+
+synth_ratio:
+  n_per_alpha: 500                 # per (class, alpha) → 500 * 10 * 4 = 20k pool
+  alpha_values:
+  - 0.0
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  cfg_scale: 7.5
+  alpha_cfg_scale: 1.0
+  steps: 50
+  diffusion_ckpt: checkpoints/das_pixel_diffusion/diffusion_best.pt
+  pixel_diffusion_config: configs/pixel_diffusion_config.yaml
+  use_ema: true
+  gen_batch_size: 50

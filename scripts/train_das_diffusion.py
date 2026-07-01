@@ -1,0 +1,218 @@
+"""
+Stage-3 latent-diffusion training entry point.
+
+Builds DASLatentPatchDataset(return_mixed=True), pairs each event patch with a noise
+patch and a random alpha, encodes the mixed patch through a frozen Stage-1 VAE inside
+the trainer, and trains a class + alpha-conditional 1D UNet on the resulting latents.
+
+Usage:
+    python scripts/train_das_diffusion.py \
+        --config configs/latent_diffusion_config.yaml \
+        --vae_ckpt checkpoints/das_vae_v2/vae_best.pt
+"""
+
+import argparse
+import os
+import random
+import sys
+from datetime import datetime
+
+import numpy as np
+import torch
+import yaml
+from torch.utils.data import DataLoader, random_split
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from src.data.das_latent_patch_dataset import DASLatentPatchDataset  # noqa: E402
+from src.models.das_diffusion_unet import DASDiffusionUNet  # noqa: E402
+from src.models.das_vae_v2 import DASVAEv2  # noqa: E402
+from src.training.diffusion_trainer import DASDiffusionTrainer  # noqa: E402
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def load_vae(cfg: dict, ckpt_path: str, device: str):
+    vae_cfg = cfg["model"]["vae"]
+    vae = DASVAEv2(
+        in_channels=1,
+        encoder_channels=tuple(vae_cfg["encoder_channels"]),
+        latent_channels=vae_cfg["latent_channels"],
+        temporal_strides=tuple(vae_cfg["temporal_strides"]),
+        kernel_time=vae_cfg["kernel_time"],
+        kernel_space=vae_cfg["kernel_space"],
+    ).to(device)
+    ckpt = torch.load(ckpt_path, map_location=device)
+    vae.load_state_dict(ckpt["model_state"])
+    vae.eval()
+    return vae
+
+
+def init_wandb(cfg: dict, stage: str):
+    """Initialize W&B for a training stage; returns the wandb module or None if disabled."""
+    stage_cfg = cfg["training"][stage]
+    project = stage_cfg.get("wandb_project")
+    if not project:
+        return None
+    try:
+        import wandb  # noqa: WPS433
+    except ImportError:
+        print("WARNING: wandb not installed; logging disabled.")
+        return None
+    run_name = stage_cfg.get("wandb_run_name") or f"{stage}-{datetime.now():%Y%m%d-%H%M%S}"
+    wandb.init(project=project, name=run_name, config=cfg, resume="allow")
+    return wandb
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/latent_diffusion_config.yaml")
+    parser.add_argument("--vae_ckpt", required=True,
+                        help="Path to a trained Stage-1 VAE checkpoint")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
+    args = parser.parse_args()
+
+    with open(args.config) as f:
+        cfg = yaml.safe_load(f)
+
+    data_cfg = cfg["data"]
+    vae_cfg = cfg["model"]["vae"]
+    diff_cfg = cfg["model"]["diffusion"]
+    train_cfg = cfg["training"]["diffusion"]
+
+    set_seed(data_cfg["seed"])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Device: {device}")
+
+    scaling_factor = float(vae_cfg.get("scaling_factor", 1.0))
+    if scaling_factor == 1.0:
+        print("WARNING: model.vae.scaling_factor is 1.0 — did you fill it in after Stage 1?")
+
+    vae = load_vae(cfg, args.vae_ckpt, device)
+    print(f"Loaded VAE from {args.vae_ckpt}  scaling_factor={scaling_factor}")
+
+    normalize = (data_cfg["normalize"]["mean"], data_cfg["normalize"]["std"])
+    dataset = DASLatentPatchDataset(
+        data_dir=data_cfg["data_dir"],
+        patch_channels=data_cfg["patch_channels"],
+        patch_time=data_cfg["patch_time"],
+        event_offset_range=tuple(data_cfg["event_offset_range"]),
+        decimation=data_cfg["decimation"],
+        classes=data_cfg["classes"],
+        normalize=normalize,
+        seed=data_cfg["seed"],
+        return_mixed=True,
+        mix_alpha_range=tuple(data_cfg.get("mix_alpha_range", [0.0, 1.0])),
+        cache_in_ram=data_cfg.get("cache_in_ram", False),
+        target_sample_rate=data_cfg.get("target_sample_rate", 1000),
+    )
+    print(f"Total samples: {len(dataset)}  noise pool size: {len(dataset._noise_samples)}")
+
+    n_test = int(len(dataset) * data_cfg["test_split"])
+    n_val = int(len(dataset) * data_cfg["val_split"])
+    n_train = len(dataset) - n_val - n_test
+    train_ds, val_ds, _test_ds = random_split(
+        dataset, [n_train, n_val, n_test],
+        generator=torch.Generator().manual_seed(data_cfg["seed"]),
+    )
+    print(f"Split  train:{n_train}  val:{n_val}  test:{n_test}")
+
+    # Weighted sampler over classes — `regular` dominates the unbalanced index.
+    train_labels = np.array(
+        [int(dataset.samples[train_ds.indices[i]][3]) for i in range(len(train_ds))]
+    )
+    class_counts = np.bincount(train_labels, minlength=len(data_cfg["classes"]))
+    weights = 1.0 / np.clip(class_counts[train_labels], 1, None)
+    sampler = torch.utils.data.WeightedRandomSampler(
+        weights=torch.as_tensor(weights, dtype=torch.double),
+        num_samples=len(train_ds),
+        replacement=True,
+    )
+
+    nw = data_cfg["num_workers"]
+    train_loader = DataLoader(
+        train_ds, batch_size=train_cfg["batch_size"], sampler=sampler,
+        num_workers=nw, pin_memory=(device == "cuda"),
+        persistent_workers=nw > 0,
+        prefetch_factor=4 if nw > 0 else None,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=train_cfg["batch_size"], shuffle=False,
+        num_workers=nw, pin_memory=(device == "cuda"),
+        persistent_workers=nw > 0,
+        prefetch_factor=4 if nw > 0 else None,
+    )
+
+    model = DASDiffusionUNet(
+        latent_channels=vae_cfg["latent_channels"],
+        spatial_h=data_cfg["patch_channels"],
+        num_classes=diff_cfg["num_classes"],
+        cond_dim=diff_cfg["cond_dim"],
+    )
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model parameters: {n_params:,}")
+
+    if args.dry_run:
+        batch = next(iter(train_loader))
+        mixed_patch, class_idx, alpha = batch
+        model = model.to(device); vae = vae.to(device)
+        x = mixed_patch.to(device)
+        with torch.no_grad():
+            mu, _ = vae.encode(x)
+        from src.training.diffusion_trainer import flatten_latent
+        x_flat = flatten_latent(mu * scaling_factor)
+        t = torch.zeros(x_flat.size(0), device=device, dtype=torch.long)
+        cls = class_idx.to(device).long()
+        a = torch.as_tensor(alpha, device=device, dtype=torch.float32)
+        pred = model(x_flat, t, cls, a)
+        print(f"Dry run OK")
+        print(f"  mixed patch  : {tuple(x.shape)}")
+        print(f"  latent (mu)  : {tuple(mu.shape)}")
+        print(f"  flattened    : {tuple(x_flat.shape)}")
+        print(f"  pred out     : {tuple(pred.shape)}")
+        print(f"  alpha sample : {a.tolist()[:4]}")
+        return
+
+    wandb_logger = None if args.no_wandb else init_wandb(cfg, "diffusion")
+
+    trainer = DASDiffusionTrainer(
+        model=model,
+        vae=vae,
+        scaling_factor=scaling_factor,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=device,
+        epochs=train_cfg["epochs"],
+        lr=train_cfg["lr"],
+        weight_decay=train_cfg["weight_decay"],
+        grad_clip=train_cfg["grad_clip"],
+        amp=train_cfg["amp"],
+        cfg_dropout=diff_cfg["cfg_dropout"],
+        alpha_cfg_dropout=diff_cfg.get("alpha_cfg_dropout", diff_cfg["cfg_dropout"]),
+        num_train_timesteps=diff_cfg["num_train_timesteps"],
+        prediction_type=diff_cfg["prediction_type"],
+        beta_schedule=diff_cfg["beta_schedule"],
+        ema_decay=diff_cfg["ema_decay"],
+        checkpoint_dir=train_cfg["checkpoint_dir"],
+        wandb_logger=wandb_logger,
+        log_freq=train_cfg.get("wandb_log_freq", 500),
+        sample_every_n_epochs=train_cfg.get("wandb_sample_every_n_epochs", 5),
+        patch_time=data_cfg["patch_time"],
+    )
+    trainer.fit()
+
+    if wandb_logger is not None:
+        wandb_logger.finish()
+
+
+if __name__ == "__main__":
+    main()

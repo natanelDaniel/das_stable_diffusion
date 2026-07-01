@@ -1,6 +1,16 @@
 # Generated artifacts
 checkpoints/
 generated/
+demo_outputs/
+demo_outputs_v2/
+
+# Homework / unrelated notebooks
+hw3_LDS.ipynb
+hw3_LDS.pdf
+hw3_kalman.png
+hw3_kalman.py
+hw4_MRF.ipynb
+hw4_MRF.pdf
 
 # Python
 __pycache__/
